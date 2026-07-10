@@ -1,0 +1,33 @@
+services:
+  dashboard:
+    build: .
+    image: cc-analytics
+    ports:
+      - "8501:8501"
+    environment:
+      # Dataset size — override on the CLI, e.g. GEN_NUM_SESSIONS=20000 docker compose up
+      GEN_NUM_USERS: ${GEN_NUM_USERS:-100}
+      GEN_NUM_SESSIONS: ${GEN_NUM_SESSIONS:-5000}
+      GEN_DAYS: ${GEN_DAYS:-60}
+      GEN_SEED: ${GEN_SEED:-42}
+    volumes:
+      # Persist generated data + DuckDB on the host so restarts don't regenerate.
+      # The host ./data also provides generate_fake_data.py to the container.
+      - ./data:/app/data
+
+  # Programmatic access (bonus). Reuses the same image + data volume; waits for the
+  # dashboard service to build the DuckDB file, then serves the read-only API.
+  api:
+    build: .
+    image: cc-analytics
+    depends_on:
+      - dashboard
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    entrypoint:
+      - sh
+      - -c
+      - "until [ -f \"$$DUCKDB_PATH\" ]; do echo 'api: waiting for analytics.duckdb…'; sleep 2; done;
+         exec uvicorn api.main:app --host 0.0.0.0 --port 8000 --app-dir /app"

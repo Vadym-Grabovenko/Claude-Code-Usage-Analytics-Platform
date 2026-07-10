@@ -1,0 +1,29 @@
+# Keep the Docker build context small & the image clean.
+# The Dockerfile copies only src/, dashboard/, api/, data/generate_fake_data.py and
+# docker/entrypoint.sh — everything else here would just bloat the build context.
+
+.git/
+.gitignore
+
+# Generated data & database (regenerated inside the container at startup).
+# NOTE: data/generate_fake_data.py is NOT ignored — the Dockerfile needs it.
+data/output/
+*.duckdb
+*.duckdb.wal
+
+# Python caches & local envs
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Docs / deliverables not needed at runtime
+presentation.pptx
+tests/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

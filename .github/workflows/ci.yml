@@ -1,0 +1,82 @@
+name: CI
+
+# Run tests on every push/PR; only if they pass, build the image and prove the whole
+# `docker compose up` stack comes up healthy (integration smoke test).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same ref cancels an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # matches the Docker base image (python:3.12-slim)
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run test suite
+        run: PYTHONPATH=src pytest -q
+
+  docker:
+    name: Build image & smoke-test the stack
+    needs: test          # gate: only build/run if the tests pass
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker compose build
+
+      - name: Start the stack (small dataset for a fast smoke test)
+        env:
+          GEN_NUM_USERS: "15"
+          GEN_NUM_SESSIONS: "200"
+          GEN_DAYS: "14"
+        run: docker compose up -d
+
+      - name: Wait for the dashboard and API to become healthy
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8501/_stcore/health >/dev/null \
+               && curl -sf http://localhost:8000/health >/dev/null; then
+              echo "✓ dashboard (:8501) and API (:8000) are healthy"
+              exit 0
+            fi
+            echo "waiting for services… ($i)"
+            sleep 5
+          done
+          echo "::error::services did not become healthy in time"
+          docker compose logs
+          exit 1
+
+      - name: Smoke-test the API
+        run: |
+          echo "GET /kpis:"
+          curl -sf http://localhost:8000/kpis | tee /tmp/kpis.json
+          echo
+          grep -q '"api_requests"' /tmp/kpis.json
+          # a real cost aggregate proves the pipeline ran end-to-end, not just liveness
+          curl -sf "http://localhost:8000/cost/by-model" | grep -q '"model"'
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
