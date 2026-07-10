@@ -27,25 +27,54 @@ GEN_NUM_USERS=100 GEN_NUM_SESSIONS=20000 GEN_DAYS=90 docker compose up --build
 (the Docker CLI alone cannot start containers). Verify with `docker compose version`
 and `docker info`.
 
-If you don't use Docker Desktop, a lightweight engine on macOS is
+**macOS** — use **Docker Desktop**, or a lightweight CLI engine via
 [colima](https://github.com/abiosoft/colima):
 
 ```bash
 brew install colima docker-buildx        # docker-buildx is required by Compose v2 to build
 colima start                             # starts the Docker daemon
-docker compose up --build                # now works
+docker compose up --build
 ```
 
-To install just the Compose plugin manually (Linux/macOS), drop the release binary
-into `~/.docker/cli-plugins/docker-compose` and `chmod +x` it.
+(To install just the Compose plugin manually, drop the release binary into
+`~/.docker/cli-plugins/docker-compose` and `chmod +x` it.)
+
+**Windows** — install **Docker Desktop** with the **WSL 2** backend, then run from
+PowerShell or a WSL shell:
+
+```powershell
+docker compose up --build
+```
+
+To override the dataset size on PowerShell, set the env var first (the inline
+`KEY=value cmd` form is bash-only):
+
+```powershell
+$env:GEN_NUM_SESSIONS=20000; docker compose up --build
+```
 
 ### Local (without Docker)
+
+**macOS / Linux:**
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 make pipeline      # generate data + build the DuckDB database
 make dashboard     # serve Streamlit at http://localhost:8501
+make api           # (optional) serve the REST API at http://localhost:8000
+```
+
+**Windows (PowerShell)** — `make` isn't available by default, so run the steps directly:
+
+```powershell
+python -m venv .venv; .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+$env:PYTHONPATH = "src"
+python data\generate_fake_data.py --num-users 100 --num-sessions 5000 --days 60 --output-dir data\output
+python -m analytics.etl                                    # build the DuckDB database
+streamlit run dashboard\app.py                             # dashboard at :8501
+python -m uvicorn api.main:app --host 0.0.0.0 --port 8000  # (optional) API at :8000
 ```
 
 ## Architecture
