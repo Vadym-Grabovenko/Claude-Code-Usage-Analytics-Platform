@@ -31,7 +31,6 @@ tests/
 # Docs / deliverables / tooling not needed at runtime
 docs/
 *.md
-presentation.pptx
 Makefile
 docker-compose.yml
 
