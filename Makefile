@@ -9,7 +9,7 @@ GEN_PROVIDERS ?= claude_code,openai,gemini,deepseek
 
 help:
 	@echo "Targets:"
-	@echo "  install    Install Python dependencies"
+	@echo "  install    Install Python dependencies (runtime + test: requirements-dev.txt)"
 	@echo "  data       Generate synthetic usage data for all providers (GEN_PROVIDERS)"
 	@echo "  etl        Build the DuckDB analytics database from the dataset"
 	@echo "  pipeline   data + etl (full refresh)"
@@ -19,7 +19,7 @@ help:
 	@echo "  clean      Remove generated data and database"
 
 install:
-	$(PY) -m pip install -r requirements.txt
+	$(PY) -m pip install -r requirements-dev.txt
 
 data:
 	$(PY) data/generate_fake_data.py \

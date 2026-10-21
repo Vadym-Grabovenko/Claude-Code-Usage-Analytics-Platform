@@ -33,8 +33,14 @@ class Filters:
     end_date: date | None = None
     practices: list[str] = field(default_factory=list)
     levels: list[str] = field(default_factory=list)
-    models: list[str] = field(default_factory=list)       # raw model ids OR model families
+    # ``models``: raw model ids. For backward compatibility with the dashboard (which sends
+    # model *families* here) it also matches ``model_family`` unless
+    # ``models_match_family=False`` -- the API sets that so ``?models=gpt-4o`` means exactly
+    # the raw id ``gpt-4o`` and does not swallow dated snapshots like ``gpt-4o-2024-08-06``.
+    models: list[str] = field(default_factory=list)
     providers: list[str] = field(default_factory=list)    # e.g. ["claude_code", "openai"]
+    model_families: list[str] = field(default_factory=list)  # normalized family, e.g. "gpt-4o"
+    models_match_family: bool = True
 
     def clause(self) -> tuple[str, list]:
         """Return a ``WHERE`` fragment (without the keyword) and bind params."""
@@ -53,11 +59,18 @@ class Filters:
             conds.append(f"level IN ({', '.join('?' * len(self.levels))})")
             params.extend(self.levels)
         if self.models:
-            # Old callers send raw model ids, the dashboard sends model families.
             marks = ", ".join("?" * len(self.models))
-            conds.append(f"(model IN ({marks}) OR model_family IN ({marks}))")
-            params.extend(self.models)
-            params.extend(self.models)
+            if self.models_match_family:
+                # Legacy/dashboard behaviour: raw id OR family (see field comment).
+                conds.append(f"(model IN ({marks}) OR model_family IN ({marks}))")
+                params.extend(self.models)
+                params.extend(self.models)
+            else:
+                conds.append(f"model IN ({marks})")
+                params.extend(self.models)
+        if self.model_families:
+            conds.append(f"model_family IN ({', '.join('?' * len(self.model_families))})")
+            params.extend(self.model_families)
         if self.providers:
             conds.append(f"provider IN ({', '.join('?' * len(self.providers))})")
             params.extend(self.providers)
@@ -402,6 +415,20 @@ def error_rate_anomalies(
 def valid_providers() -> list[str]:
     """Every provider id the platform knows (for validating ``Filters.providers``)."""
     return list(PROVIDER_NAMES)
+
+
+def provider_catalog(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    """Every known provider (registry order) with its label and loaded event count —
+    unfiltered, like :func:`filter_options`. ``has_data`` is False for a provider whose
+    optional source file was missing at ETL time."""
+    counts = dict(con.execute(
+        "SELECT provider, count(*) FROM events GROUP BY provider").fetchall())
+    return pd.DataFrame(
+        [{"provider": p, "label": PROVIDER_LABELS.get(p, p),
+          "events": int(counts.get(p, 0)), "has_data": p in counts}
+         for p in valid_providers()],
+        columns=["provider", "label", "events", "has_data"],
+    )
 
 
 def provider_summary(con: duckdb.DuckDBPyConnection, f: Filters) -> pd.DataFrame:

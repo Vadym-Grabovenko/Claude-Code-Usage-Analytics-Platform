@@ -1,3 +1,5 @@
+# Runtime dependencies (what the Docker image installs). Dev/test extras live in
+# requirements-dev.txt. streamlit itself pulls in pyarrow, altair, pydeck and pillow.
 duckdb == 1.5.4
 pandas>=2.1.0
 numpy>=1.26.0
@@ -6,5 +8,3 @@ plotly>=5.22.0
 python-dotenv>=1.0.0
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
-pytest>=8.0.0
-httpx>=0.27.0

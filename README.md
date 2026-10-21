@@ -59,7 +59,7 @@ $env:GEN_NUM_SESSIONS=20000; docker compose up --build
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime deps + pytest/httpx (`make install`)
 make pipeline      # generate data + build the DuckDB database
 make dashboard     # serve Streamlit at http://localhost:8501
 make api           # (optional) serve the REST API at http://localhost:8000
@@ -69,7 +69,7 @@ make api           # (optional) serve the REST API at http://localhost:8000
 
 ```powershell
 python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 $env:PYTHONPATH = "src"
 python data\generate_fake_data.py --num-users 100 --num-sessions 5000 --days 60 --output-dir data\output
 python -m analytics.etl                                    # build the DuckDB database
@@ -156,12 +156,22 @@ It comes up with `docker compose up` on **http://localhost:8000**; run it alone 
 | `GET /errors` · `/errors/rate` | error breakdown & rate over time |
 | `GET /sessions/summary` | median/p90 session duration, turns, cost |
 | `GET /adoption/{dimension}` | adoption by `terminal_type`/`cli_version`/`os_type`/`location` |
-| `GET /anomalies/cost` · `/anomalies/errors` | daily series with anomalies flagged |
+| `GET /anomalies/cost` · `/anomalies/errors` | daily series with anomalies flagged (`?by_provider=true` scores each provider separately; also on `/errors/rate`) |
+| `GET /providers` | known providers, labels, whether the DB has data for each |
+| `GET /providers/summary` | per provider: requests, errors, users, cost, tokens, p50/p95 latency, unit costs |
+| `GET /providers/share?grain=day\|week\|month` | provider share of cost/requests/users per period |
+| `GET /providers/by/{dimension}` | `practice`/`level`/`location`/`client`/`model_family` × provider (400 on other values) |
+| `GET /providers/multi-users` | `{distribution, pairs}`: users by number of providers + provider overlap |
+| `GET /models/leaderboard?limit=` | per provider × model family: usage, cost, reliability, latency |
+| `GET /data-quality` | latest ETL audit per provider (rows read/loaded/skipped, duplicates, unknown models) |
 | `GET /filters` · `/health` | filter options; liveness |
 
 Every list endpoint accepts the same filters as the dashboard, as query params:
 `?start_date=2026-01-01&end_date=2026-01-31&practices=ML%20Engineering&models=claude-opus-4-6`
-(`practices`/`levels`/`models` are repeatable). Example:
+(`practices`/`levels`/`models`/`model_families`/`providers` are repeatable). `models` matches
+**raw** model ids exactly (`gpt-4o` does not match `gpt-4o-2024-08-06`); `model_families` matches the
+normalized family. An unknown `providers` value returns **422** with the allowed values; with no
+`providers` filter every metric covers all providers. Example:
 
 ```bash
 curl "http://localhost:8000/cost/by-model?practices=ML%20Engineering"
@@ -193,11 +203,19 @@ counted and reported; missing files raise actionable errors).
 
 `.github/workflows/ci.yml` runs on every push and pull request in two gated stages:
 
-1. **`test`** — installs `requirements.txt` and runs the pytest suite.
+1. **`test`** — installs `requirements-dev.txt` (runtime deps + pytest/httpx) and runs the pytest suite.
 2. **`docker`** — only if the tests pass: `docker compose build`, then brings the whole
    stack up with `docker compose up` (on a small dataset for speed), waits for the
-   dashboard *and* API health checks, and smoke-tests a real `/kpis` + `/cost/by-model`
-   response before tearing down.
+   dashboard *and* API health checks, and smoke-tests real `/kpis`, `/cost/by-model` and
+   `/providers/summary` responses (one row per provider in `GEN_PROVIDERS`) before tearing down.
+
+Both jobs run on the pinned `ubuntu-26.04` image (not `ubuntu-latest`). The Docker image is a
+multi-stage build on a digest-pinned `python:3.12.x-slim-trixie`: runtime deps only
+(`requirements.txt`; test tools live in `requirements-dev.txt`), no build tooling, and the app runs
+as an unprivileged user (the entrypoint adopts the owner of the `./data` mount, falling back to `app`).
+**Linux, upgrading from an older image that ran as root:** files it wrote under `./data` are
+root-owned and the new non-root container stops with an error naming them; reclaim them once with
+`sudo chown -R $USER data/`.
 
 So a green pipeline proves both that the code is correct and that the single-command
 stack actually boots end-to-end.

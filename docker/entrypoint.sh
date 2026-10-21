@@ -2,6 +2,12 @@
 # Single-command startup: generate data (if absent) -> build DB -> serve dashboard.
 set -e
 
+# Never run the app as root: re-exec this script through the shared privilege drop
+# (picks the /app/data owner / `app` user; see docker/run-as-data-owner.sh).
+if [ "$(id -u)" = 0 ]; then
+  exec "$(dirname "$0")/run-as-data-owner.sh" "$0" "$@"
+fi
+
 : "${GEN_NUM_USERS:=100}"
 : "${GEN_NUM_SESSIONS:=5000}"
 : "${GEN_DAYS:=60}"

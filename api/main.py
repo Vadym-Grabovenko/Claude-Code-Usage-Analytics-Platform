@@ -3,8 +3,12 @@
 Programmatic, **read-only** access to exactly the metrics the dashboard shows — the
 query layer in ``src/analytics/queries.py`` is reused verbatim, so the API, the
 dashboard, and the tests all compute numbers the same way. Every list endpoint accepts
-the same optional filters as the dashboard (``start_date``, ``end_date``, repeated
-``practices`` / ``levels`` / ``models``) and returns JSON.
+the same optional filters (``start_date``, ``end_date``, repeated ``practices`` /
+``levels`` / ``models`` / ``model_families`` / ``providers``) and returns JSON.
+
+Model filters: ``models`` matches **raw** model ids only (``gpt-4o`` does not match the
+snapshot ``gpt-4o-2024-08-06``); ``model_families`` matches the normalized family.
+With no ``providers`` filter every metric covers all providers.
 
 Run:  ``uvicorn api.main:app --host 0.0.0.0 --port 8000``   (interactive docs at /docs)
 """
@@ -14,7 +18,7 @@ import json
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 # Make the src package importable whether run from repo root, Docker, or elsewhere.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -27,10 +31,11 @@ from analytics import queries  # noqa: E402
 from analytics.queries import Filters  # noqa: E402
 
 app = FastAPI(
-    title="Claude Code Usage Analytics API",
-    description="Programmatic, read-only access to the telemetry analytics metrics. "
-                "All list endpoints accept the same filters as the dashboard.",
-    version="1.0.0",
+    title="AI Usage Analytics API",
+    description="Programmatic, read-only access to AI-assistant usage analytics "
+                "(Claude Code, OpenAI, Gemini, DeepSeek). All list endpoints accept the "
+                "same filters as the dashboard.",
+    version="1.1.0",
 )
 
 
@@ -59,11 +64,28 @@ def get_filters(
     end_date: Optional[date] = Query(None, description="inclusive upper bound (YYYY-MM-DD)"),
     practices: Optional[list[str]] = Query(None, description="repeatable"),
     levels: Optional[list[str]] = Query(None, description="repeatable, e.g. L5"),
-    models: Optional[list[str]] = Query(None, description="repeatable"),
+    models: Optional[list[str]] = Query(
+        None, description="repeatable; raw model id, exact match (e.g. gpt-4o-2024-08-06)"),
+    model_families: Optional[list[str]] = Query(
+        None, description="repeatable; normalized model family (e.g. gpt-4o)"),
+    providers: Optional[list[str]] = Query(
+        None, description="repeatable; one of GET /providers (empty = all providers)"),
 ) -> Filters:
+    providers = providers or []
+    allowed = queries.valid_providers()
+    errors = [
+        {"type": "enum", "loc": ["query", "providers"],
+         "msg": f"Input should be one of: {', '.join(allowed)}",
+         "input": p, "ctx": {"expected": allowed}}
+        for p in dict.fromkeys(providers) if p not in allowed
+    ]
+    if errors:  # same body shape as FastAPI's own request-validation 422s
+        raise HTTPException(status_code=422, detail=errors)
     return Filters(
         start_date=start_date, end_date=end_date,
         practices=practices or [], levels=levels or [], models=models or [],
+        model_families=model_families or [], providers=providers,
+        models_match_family=False,  # API contract: `models` = raw ids only
     )
 
 
@@ -150,8 +172,9 @@ def errors(con=Depends(get_con), f: Filters = Depends(get_filters)):
 
 
 @app.get("/errors/rate", tags=["reliability"])
-def error_rate(con=Depends(get_con), f: Filters = Depends(get_filters)):
-    return _records(queries.error_rate_over_time(con, f))
+def error_rate(by_provider: bool = Query(False, description="one series per provider"),
+               con=Depends(get_con), f: Filters = Depends(get_filters)):
+    return _records(queries.error_rate_over_time(con, f, by_provider=by_provider))
 
 
 # --- sessions ---------------------------------------------------------------
@@ -190,14 +213,70 @@ def adoption(dimension: str, con=Depends(get_con), f: Filters = Depends(get_filt
 @app.get("/anomalies/cost", tags=["anomalies"])
 def cost_anomalies(window: int = Query(7, ge=3, le=30),
                    z_thresh: float = Query(3.0, ge=1.0, le=6.0),
+                   by_provider: bool = Query(False, description="score each provider separately"),
                    con=Depends(get_con), f: Filters = Depends(get_filters)):
     """Daily spend with anomalous days flagged (causal rolling z-score)."""
-    return _records(queries.cost_anomalies(con, f, window=window, z_thresh=z_thresh))
+    return _records(queries.cost_anomalies(con, f, window=window, z_thresh=z_thresh,
+                                           by_provider=by_provider))
 
 
 @app.get("/anomalies/errors", tags=["anomalies"])
 def error_anomalies(window: int = Query(7, ge=3, le=30),
                     z_thresh: float = Query(3.0, ge=1.0, le=6.0),
+                    by_provider: bool = Query(False, description="score each provider separately"),
                     con=Depends(get_con), f: Filters = Depends(get_filters)):
     """Daily API error rate with anomalous days flagged."""
-    return _records(queries.error_rate_anomalies(con, f, window=window, z_thresh=z_thresh))
+    return _records(queries.error_rate_anomalies(con, f, window=window, z_thresh=z_thresh,
+                                                 by_provider=by_provider))
+
+
+# --- providers (multi-provider comparison) ----------------------------------
+
+@app.get("/providers", tags=["providers"])
+def providers(con=Depends(get_con)):
+    """Every provider the platform knows, with its label and whether the DB has data."""
+    return _records(queries.provider_catalog(con))
+
+
+@app.get("/providers/summary", tags=["providers"])
+def providers_summary(con=Depends(get_con), f: Filters = Depends(get_filters)):
+    """Per provider: requests, errors, error rate, users, sessions, cost, tokens,
+    p50/p95 latency, cost per user / request / 1K tokens."""
+    return _records(queries.provider_summary(con, f))
+
+
+@app.get("/providers/share", tags=["providers"])
+def providers_share(grain: Literal["day", "week", "month"] = Query("week"),
+                    con=Depends(get_con), f: Filters = Depends(get_filters)):
+    """Per period x provider: absolute cost/requests/users and each provider's share."""
+    return _records(queries.provider_share_over_time(con, f, grain=grain))
+
+
+@app.get("/providers/by/{dimension}", tags=["providers"])
+def providers_by(dimension: str, con=Depends(get_con), f: Filters = Depends(get_filters)):
+    """`dimension` ∈ {practice, level, location, client, model_family} x provider."""
+    try:
+        return _records(queries.provider_by_dimension(con, f, dimension))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/providers/multi-users", tags=["providers"])
+def providers_multi_users(con=Depends(get_con), f: Filters = Depends(get_filters)):
+    """`distribution`: users by number of providers used; `pairs`: provider overlap."""
+    res = queries.multi_provider_users(con, f)
+    return {"distribution": _records(res["distribution"]), "pairs": _records(res["pairs"])}
+
+
+@app.get("/models/leaderboard", tags=["providers"])
+def models_leaderboard(limit: Optional[int] = Query(None, ge=1, le=500),
+                       con=Depends(get_con), f: Filters = Depends(get_filters)):
+    """Per provider x model family: usage, cost, unit cost, error rate, latency, recency."""
+    return _records(queries.model_leaderboard(con, f, limit=limit))
+
+
+@app.get("/data-quality", tags=["providers"])
+def data_quality(con=Depends(get_con), f: Filters = Depends(get_filters)):
+    """Latest ETL audit per provider: rows read/loaded/skipped, duplicates, unknown
+    models, unpriced requests, users missing from the employee directory."""
+    return _records(queries.data_quality(con, f))
