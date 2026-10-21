@@ -42,9 +42,38 @@ class IngestStats:
     skipped_events: int = 0         # event message failed to parse / validate
     by_event_type: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    # --- multi-provider extensions (all optional; Claude-Code-only callers can ignore) ---
+    records: int = 0                # raw source records seen (log events / lines / CSV rows)
+    duplicates: int = 0             # rows dropped by (provider, source_event_id) dedup
+    by_provider: dict[str, int] = field(default_factory=dict)
+    unknown_models: set[str] = field(default_factory=set)   # "provider:model_family" w/o a price
 
     def note_type(self, event_type: str) -> None:
         self.by_event_type[event_type] = self.by_event_type.get(event_type, 0) + 1
+
+    def note_provider(self, provider: str, n: int = 1) -> None:
+        self.by_provider[provider] = self.by_provider.get(provider, 0) + n
+
+    def warn(self, message: str) -> None:
+        """Record a parse/validation warning (capped so a bad file can't flood memory)."""
+        if len(self.errors) < 20:
+            self.errors.append(message)
+
+    def merge(self, other: "IngestStats") -> None:
+        """Fold another (e.g. per-provider) stats object into this one."""
+        self.batches += other.batches
+        self.events += other.events
+        self.skipped_lines += other.skipped_lines
+        self.skipped_events += other.skipped_events
+        self.records += other.records
+        self.duplicates += other.duplicates
+        for k, v in other.by_event_type.items():
+            self.by_event_type[k] = self.by_event_type.get(k, 0) + v
+        for k, v in other.by_provider.items():
+            self.note_provider(k, v)
+        self.unknown_models |= other.unknown_models
+        for msg in other.errors:
+            self.warn(msg)
 
 
 def _to_int(value: Any) -> int | None:
@@ -142,6 +171,18 @@ def iter_events(jsonl_path: str | Path, stats: IngestStats | None = None) -> Ite
     and pass it in to inspect the counts afterward). Streaming keeps memory flat
     regardless of file size.
     """
+    for _event_id, row in iter_log_events(jsonl_path, stats):
+        yield row
+
+
+def iter_log_events(
+    jsonl_path: str | Path, stats: IngestStats | None = None
+) -> Iterator[tuple[str | None, dict[str, Any]]]:
+    """Like :func:`iter_events` but also yields the CloudWatch ``logEvents[].id``.
+
+    The id is the natural de-duplication key for a log event (the multi-provider
+    ETL stores it as ``source_event_id``). Yields ``(log_event_id, row)``.
+    """
     if stats is None:
         stats = IngestStats()
     path = Path(jsonl_path)
@@ -162,9 +203,17 @@ def iter_events(jsonl_path: str | Path, stats: IngestStats | None = None) -> Ite
                 if len(stats.errors) < 20:
                     stats.errors.append(f"line {line_no}: bad batch JSON ({exc})")
                 continue
+            if not isinstance(batch, dict):          # valid JSON but not a batch object
+                stats.skipped_lines += 1
+                stats.warn(f"line {line_no}: batch is not a JSON object")
+                continue
 
             stats.batches += 1
             for log_event in batch.get("logEvents", []):
+                stats.records += 1
+                if not isinstance(log_event, dict):
+                    stats.skipped_events += 1
+                    continue
                 message = log_event.get("message")
                 try:
                     event = json.loads(message) if isinstance(message, str) else message
@@ -174,11 +223,12 @@ def iter_events(jsonl_path: str | Path, stats: IngestStats | None = None) -> Ite
                         stats.errors.append(f"line {line_no}: bad event message ({exc})")
                     continue
 
-                row = normalize_event(event or {})
+                row = normalize_event(event) if isinstance(event, dict) else None
                 if row is None:
                     stats.skipped_events += 1
                     continue
 
                 stats.events += 1
                 stats.note_type(row["event_type"])
-                yield row
+                event_id = log_event.get("id")
+                yield (str(event_id) if event_id is not None else None), row

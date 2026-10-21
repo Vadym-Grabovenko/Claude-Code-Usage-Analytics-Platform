@@ -19,6 +19,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # full history: tests/test_generator.py re-runs the original generator from
+          # its commit to prove the Claude Code output is unchanged
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:

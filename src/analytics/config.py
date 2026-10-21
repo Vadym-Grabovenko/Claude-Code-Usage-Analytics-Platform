@@ -30,6 +30,16 @@ DATA_DIR: Path = _path("DATA_DIR", "data/output")
 TELEMETRY_JSONL: Path = _path("TELEMETRY_JSONL", str(DATA_DIR / "telemetry_logs.jsonl"))
 EMPLOYEES_CSV: Path = _path("EMPLOYEES_CSV", str(DATA_DIR / "employees.csv"))
 
+# --- Other AI providers (also written by data/generate_fake_data.py) ---
+# Comma-separated list of enabled provider adapters (see analytics.providers.REGISTRY).
+PROVIDERS: list[str] = [
+    p.strip() for p in os.environ.get("PROVIDERS", "claude_code,openai,gemini,deepseek").split(",")
+    if p.strip()
+]
+OPENAI_USAGE_JSONL: Path = _path("OPENAI_USAGE_JSONL", str(DATA_DIR / "openai_usage.jsonl"))
+GEMINI_USAGE_JSONL: Path = _path("GEMINI_USAGE_JSONL", str(DATA_DIR / "gemini_usage.jsonl"))
+DEEPSEEK_USAGE_CSV: Path = _path("DEEPSEEK_USAGE_CSV", str(DATA_DIR / "deepseek_usage.csv"))
+
 # DuckDB database file produced by the ETL and read by the dashboard
 DUCKDB_PATH: Path = _path("DUCKDB_PATH", "data/analytics.duckdb")
 
