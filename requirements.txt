@@ -3,7 +3,7 @@
 duckdb == 1.5.4
 pandas>=2.1.0
 numpy>=1.26.0
-streamlit>=1.36.0
+streamlit>=1.51.0      # first release where st.plotly_chart AND st.dataframe take width="stretch"
 plotly>=5.22.0
 python-dotenv>=1.0.0
 fastapi>=0.111.0

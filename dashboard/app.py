@@ -162,11 +162,13 @@ def sidebar_filters() -> Filters:
     # grouped (multiselect has no option groups).
     by_provider = opts["models_by_provider"]
     owner = {m: p for p in (providers or list(by_provider)) for m in by_provider.get(p, [])}
-    models = st.sidebar.multiselect(
+    families = st.sidebar.multiselect(
         "Model", list(owner), format_func=lambda m: f"{provider_label(owner[m])} · {m}")
     st.sidebar.caption("Filters apply to every chart below.")
+    # The options are model *families*, so they go to ``model_families``; ``models`` (raw ids)
+    # stays empty.
     return Filters(start_date=start, end_date=end, providers=providers,
-                   practices=practices, levels=levels, models=models)
+                   practices=practices, levels=levels, model_families=families)
 
 
 # --- Overview (Leadership) ---------------------------------------------------
@@ -184,27 +186,27 @@ def tab_overview(con, f: Filters, in_view: list[str]) -> None:
         st.plotly_chart(
             px.area(by_day, x="period", y="total_cost", title="Daily spend (USD) by provider",
                     labels={"period": "date"}, **ps),
-            use_container_width=True)
+            width="stretch")
         cols = st.columns(2)
         cols[0].plotly_chart(
             px.line(by_day, x="period", y="users", title="Daily active users by provider",
-                    labels={"period": "date"}, markers=True, **ps), use_container_width=True)
+                    labels={"period": "date"}, markers=True, **ps), width="stretch")
         cols[1].plotly_chart(
             px.bar(by_day, x="period", y="requests", title="Daily API requests by provider",
-                   labels={"period": "date"}, **ps), use_container_width=True)
+                   labels={"period": "date"}, **ps), width="stretch")
     else:
         sc = single_color(in_view)
         st.plotly_chart(
             px.area(daily, x="event_date", y="cost_usd", title="Daily spend (USD)", **sc),
-            use_container_width=True,
+            width="stretch",
         )
         cols = st.columns(2)
         cols[0].plotly_chart(
             px.line(daily, x="event_date", y="active_users", title="Daily active users",
-                    markers=True, **sc), use_container_width=True)
+                    markers=True, **sc), width="stretch")
         cols[1].plotly_chart(
             px.bar(daily, x="event_date", y="api_requests", title="Daily API requests", **sc),
-            use_container_width=True)
+            width="stretch")
 
     heat = queries.activity_heatmap(con, f)
     if not heat.empty:
@@ -213,7 +215,7 @@ def tab_overview(con, f: Filters, in_view: list[str]) -> None:
                                  values="events", fill_value=0).reindex(DOW)
         st.plotly_chart(
             px.imshow(pivot, aspect="auto", title="Activity by day & hour (UTC)",
-                      labels=dict(color="events")), use_container_width=True)
+                      labels=dict(color="events")), width="stretch")
 
 
 # --- Providers (Leadership / FinOps / Platform-DX) ---------------------------
@@ -253,7 +255,7 @@ def tab_providers(con, f: Filters, summary: pd.DataFrame) -> None:
                     title=f"Weekly share of {metric.lower()} by provider",
                     labels={"period": "week", ycol: "share"}, **pstyle(share))
             .update_yaxes(tickformat=".0%"),
-            use_container_width=True)
+            width="stretch")
         if metric == "Active users":
             st.caption("A person using two providers in a week counts toward both.")
 
@@ -264,14 +266,14 @@ def tab_providers(con, f: Filters, summary: pd.DataFrame) -> None:
     cols[0].plotly_chart(
         px.bar(s, x="provider", y="cost_per_1k_tokens", title="Cost per 1K tokens (USD)",
                text_auto=".4f", **ps).update_layout(showlegend=False),
-        use_container_width=True)
+        width="stretch")
     lat = s.melt(id_vars="provider", value_vars=["p50_latency_ms", "p95_latency_ms"],
                  var_name="percentile", value_name="latency_ms")
     lat["percentile"] = lat["percentile"].map({"p50_latency_ms": "p50", "p95_latency_ms": "p95"})
     cols[1].plotly_chart(
         px.bar(lat, x="provider", y="latency_ms", pattern_shape="percentile", barmode="group",
                title="Request latency p50 / p95 (ms)", **ps),
-        use_container_width=True)
+        width="stretch")
 
     # Who prefers which provider.
     st.subheader("Provider preference by cohort")
@@ -295,7 +297,7 @@ def tab_providers(con, f: Filters, summary: pd.DataFrame) -> None:
             px.imshow(pivot, aspect="auto", text_auto=True if val == "users" else ".3s",
                       color_continuous_scale="Blues",
                       title=f"{measure} — {dim} × provider", labels=dict(color=measure)),
-            use_container_width=True)
+            width="stretch")
 
     # Multi-provider users (FinOps: overlapping subscriptions).
     st.subheader("People using several assistants")
@@ -309,7 +311,7 @@ def tab_providers(con, f: Filters, summary: pd.DataFrame) -> None:
             px.bar(dist, x="n_providers", y="users", text_auto=True,
                    title="Users by number of providers used",
                    labels={"n_providers": "providers used"}).update_xaxes(dtick=1),
-            use_container_width=True)
+            width="stretch")
         cols[1].markdown("**Overlap pairs** (users active on both)")
         if pairs.empty:
             cols[1].info("No one in the selection uses more than one provider.")
@@ -317,7 +319,7 @@ def tab_providers(con, f: Filters, summary: pd.DataFrame) -> None:
             show = pairs.assign(provider_a=pairs["provider_a"].map(provider_label),
                                 provider_b=pairs["provider_b"].map(provider_label),
                                 jaccard=pairs["jaccard"].round(2))
-            cols[1].dataframe(show, use_container_width=True, hide_index=True)
+            cols[1].dataframe(show, width="stretch", hide_index=True)
             cols[1].caption("jaccard = shared users ÷ users of either provider.")
 
     # Model leaderboard (Platform/DX: which models are actually used).
@@ -328,7 +330,7 @@ def tab_providers(con, f: Filters, summary: pd.DataFrame) -> None:
     else:
         show = labelled(lb).drop(columns="provider_label").sort_values("total_cost",
                                                                        ascending=False)
-        st.dataframe(rounded(show, 4), use_container_width=True, hide_index=True)
+        st.dataframe(rounded(show, 4), width="stretch", hide_index=True)
 
 
 # --- Cost (FinOps) -----------------------------------------------------------
@@ -347,12 +349,12 @@ def tab_cost(con, f: Filters, in_view: list[str]) -> None:
                 px.sunburst(lb, path=["provider", "model_family"], values="total_cost",
                             title="Spend by provider → model", color="provider",
                             color_discrete_map=ps["color_discrete_map"]),
-                use_container_width=True)
+                width="stretch")
             cols[1].plotly_chart(
                 px.bar(lb.sort_values("avg_cost", ascending=False), x="model_family",
                        y="avg_cost", title="Avg cost per request by model",
                        labels={"model_family": "model"}, **ps),
-                use_container_width=True)
+                width="stretch")
     else:
         by_model = queries.cost_by_model(con, f)
         if by_model.empty:
@@ -360,28 +362,28 @@ def tab_cost(con, f: Filters, in_view: list[str]) -> None:
         else:
             cols[0].plotly_chart(
                 px.pie(by_model, names="model", values="total_cost",
-                       title="Spend by model", hole=0.45), use_container_width=True)
+                       title="Spend by model", hole=0.45), width="stretch")
             cols[1].plotly_chart(
                 px.bar(by_model, x="model", y="avg_cost", title="Avg cost per request by model",
-                       **single_color(in_view)), use_container_width=True)
+                       **single_color(in_view)), width="stretch")
     sc = single_color(in_view)
     cols = st.columns(2)
     by_practice = queries.cost_by_practice(con, f)
     if not by_practice.empty:
         cols[0].plotly_chart(
             px.bar(by_practice, x="practice", y="cost_per_user",
-                   title="Cost per user by practice", **sc), use_container_width=True)
+                   title="Cost per user by practice", **sc), width="stretch")
     by_level = queries.cost_by_level(con, f)
     if not by_level.empty:
         cols[1].plotly_chart(
             px.bar(by_level, x="level", y="cost_per_user",
-                   title="Cost per user by seniority", **sc), use_container_width=True)
+                   title="Cost per user by seniority", **sc), width="stretch")
     st.subheader("Top users by spend")
     top = queries.top_users(con, f)
     if top.empty:
         st.warning(NO_DATA)
     else:
-        st.dataframe(top, use_container_width=True, hide_index=True)
+        st.dataframe(top, width="stretch", hide_index=True)
 
 
 # --- Tools (Platform/DX, Claude Code only) -----------------------------------
@@ -397,7 +399,7 @@ def tab_tools(con, f: Filters, in_view: list[str]) -> None:
     if tools.empty:
         st.warning("No tool events for the current filters."
                    + (" Tool events carry no model — clear the Model filter to see them."
-                      if f.models else ""))
+                      if f.model_families else ""))
         return
     if len(in_view) > 1:
         st.caption("Accept/reject decisions and success rates come from Claude Code; ChatGPT "
@@ -407,12 +409,12 @@ def tab_tools(con, f: Filters, in_view: list[str]) -> None:
     cols[0].plotly_chart(
         px.bar(tools.head(15), x="runs", y="tool_name", orientation="h",
                title="Most-used tools", **sc).update_yaxes(categoryorder="total ascending"),
-        use_container_width=True)
+        width="stretch")
     tools_r = tools[tools["success_rate"].notna()].copy()
     cols[1].plotly_chart(
         px.bar(tools_r, x="success_rate", y="tool_name", orientation="h",
                title="Tool success rate", **sc).update_yaxes(categoryorder="total ascending"),
-        use_container_width=True)
+        width="stretch")
     # Only tools that went through a permission decision (Claude Code); ChatGPT tool calls
     # have none, and would otherwise plot as a misleading 0%.
     decided = tools[tools["decisions"] > 0].copy()
@@ -421,13 +423,13 @@ def tab_tools(con, f: Filters, in_view: list[str]) -> None:
         px.bar(decided.sort_values("reject_rate", ascending=False),
                x="tool_name", y="reject_rate",
                title="Tool rejection rate (user rejected the proposed call)", **sc),
-        use_container_width=True)
+        width="stretch")
     src = queries.decision_sources(con, f)
     if not src.empty:
         st.plotly_chart(
             px.pie(src, names="decision_source", values="decisions",
                    title="How tool calls were authorized", hole=0.45),
-            use_container_width=True)
+            width="stretch")
 
 
 # --- Reliability (Platform/DX) -----------------------------------------------
@@ -445,12 +447,12 @@ def tab_reliability(con, f: Filters, in_view: list[str], summary: pd.DataFrame) 
                 px.line(rate, x="event_date", y="error_rate", markers=True,
                         title="API error rate over time by provider", **pstyle(rate))
                 .update_yaxes(tickformat=".1%"),
-                use_container_width=True)
+                width="stretch")
             s = labelled(summary)
             cols[1].plotly_chart(
                 px.bar(s, x="provider", y="error_rate", title="Error rate by provider",
                        **pstyle(s)).update_yaxes(tickformat=".1%").update_layout(showlegend=False),
-                use_container_width=True)
+                width="stretch")
     else:
         rate = queries.error_rate_over_time(con, f)
         if rate.empty:
@@ -459,7 +461,7 @@ def tab_reliability(con, f: Filters, in_view: list[str], summary: pd.DataFrame) 
             st.plotly_chart(
                 px.line(rate, x="event_date", y="error_rate",
                         title="API error rate over time", markers=True, **single_color(in_view)),
-                use_container_width=True)
+                width="stretch")
     errs = queries.error_breakdown(con, f)
     if errs.empty:
         if not rate.empty:
@@ -469,8 +471,8 @@ def tab_reliability(con, f: Filters, in_view: list[str], summary: pd.DataFrame) 
         by_code = errs.groupby("status_code", as_index=False)["occurrences"].sum()
         cols[0].plotly_chart(
             px.pie(by_code, names="status_code", values="occurrences",
-                   title="Errors by status code", hole=0.45), use_container_width=True)
-        cols[1].dataframe(errs, use_container_width=True, hide_index=True)
+                   title="Errors by status code", hole=0.45), width="stretch")
+        cols[1].dataframe(errs, width="stretch", hide_index=True)
 
 
 # --- Sessions & Adoption (engineers / Platform-DX) ---------------------------
@@ -497,11 +499,11 @@ def tab_sessions(con, f: Filters, in_view: list[str]) -> None:
         cols[0].plotly_chart(
             px.histogram(sessions[sessions["duration_s"] > 0], x="duration_s", nbins=50,
                          title="Session duration distribution (s)", **hs),
-            use_container_width=True)
+            width="stretch")
         cols[1].plotly_chart(
             px.histogram(sessions, x="cost_usd", nbins=50,
                          title="Session cost distribution (USD)", **hs),
-            use_container_width=True)
+            width="stretch")
         if in_view != ["claude_code"]:
             st.caption("Providers without a session id are grouped into synthetic sessions "
                        "(same person, 30-minute inactivity gap).")
@@ -536,7 +538,7 @@ def tab_sessions(con, f: Filters, in_view: list[str]) -> None:
     else:
         st.plotly_chart(
             px.bar(adoption.head(20), x=dim, y="users",
-                   title=f"Active users by {dim}", **sc), use_container_width=True)
+                   title=f"Active users by {dim}", **sc), width="stretch")
 
 
 # --- Anomalies (FinOps / Platform-DX) ----------------------------------------
@@ -573,12 +575,12 @@ def tab_anomalies(con, f: Filters, in_view: list[str]) -> None:
     m[0].metric("Cost-spike days", n_cost)
     m[1].metric("Error-rate-spike days", n_err)
 
-    st.plotly_chart(chart(cost_df, "cost_usd", "Daily spend (USD)"), use_container_width=True)
+    st.plotly_chart(chart(cost_df, "cost_usd", "Daily spend (USD)"), width="stretch")
     flagged = labelled(cost_df[cost_df["is_anomaly"].astype(bool)])
     if not flagged.empty:
         show = flagged[["event_date", *key, "cost_usd", "baseline", "z_score"]].copy()
         show.columns = ["Date", *[k.title() for k in key], "Cost (USD)", "Baseline", "z-score"]
-        st.dataframe(rounded(show, 2), use_container_width=True, hide_index=True)
+        st.dataframe(rounded(show, 2), width="stretch", hide_index=True)
     else:
         st.success("No cost anomalies at the current threshold. 🎉")
 
@@ -586,7 +588,7 @@ def tab_anomalies(con, f: Filters, in_view: list[str]) -> None:
         st.warning(NO_DATA)
         return
     st.plotly_chart(chart(err_df, "error_rate", "API error rate", pct=True),
-                    use_container_width=True)
+                    width="stretch")
     flagged_e = labelled(err_df[err_df["is_anomaly"].astype(bool)])
     if not flagged_e.empty:
         show = flagged_e[["event_date", *key, "error_rate", "errors", "requests",
@@ -596,7 +598,7 @@ def tab_anomalies(con, f: Filters, in_view: list[str]) -> None:
         show["z_score"] = show["z_score"].round(2)
         show.columns = ["Date", *[k.title() for k in key], "Error rate %", "Errors",
                         "Requests", "Baseline %", "z-score"]
-        st.dataframe(show, use_container_width=True, hide_index=True)
+        st.dataframe(show, width="stretch", hide_index=True)
     else:
         st.success("No error-rate anomalies at the current threshold. 🎉")
     st.caption("Baseline uses only prior days (causal), so the first few days of "
@@ -625,7 +627,7 @@ def data_quality_expander(con, f: Filters) -> None:
             m[2].metric("Requests without cost", f"{int(dq['unpriced_requests'].sum()):,}")
             m[3].metric("Users not in directory", f"{int(dq['users_without_employee'].sum()):,}")
             st.dataframe(labelled(dq).drop(columns="provider_label"),
-                         use_container_width=True, hide_index=True)
+                         width="stretch", hide_index=True)
 
         # Calendar days in the selected range with no events at all.
         if f.start_date and f.end_date:

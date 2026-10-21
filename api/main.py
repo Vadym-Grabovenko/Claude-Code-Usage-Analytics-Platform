@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Literal, Optional
@@ -85,7 +86,6 @@ def get_filters(
         start_date=start_date, end_date=end_date,
         practices=practices or [], levels=levels or [], models=models or [],
         model_families=model_families or [], providers=providers,
-        models_match_family=False,  # API contract: `models` = raw ids only
     )
 
 
@@ -181,15 +181,26 @@ def error_rate(by_provider: bool = Query(False, description="one series per prov
 
 @app.get("/sessions/summary", tags=["sessions"])
 def sessions_summary(con=Depends(get_con), f: Filters = Depends(get_filters)):
-    """Aggregate session stats (the per-session table would be too large to return)."""
+    """Aggregate session stats (the per-session table would be too large to return).
+
+    Duration and cost cover every selected provider. Turns and tool calls exist only in
+    Claude Code telemetry, so ``median_turns`` / ``median_tool_calls`` are computed over
+    the Claude Code sessions in the selection (``cc_sessions`` of them); they are
+    ``null`` when Claude Code isn't selected.
+    """
     s = queries.session_stats(con, f)
     if s.empty:
         return {"sessions": 0}
+    cc = None
+    if not f.providers or "claude_code" in f.providers:
+        cc = queries.session_stats(con, replace(f, providers=["claude_code"]))
+    has_cc = cc is not None and not cc.empty
     return {
         "sessions": int(len(s)),
+        "cc_sessions": int(len(cc)) if cc is not None else 0,
         "median_duration_s": float(s["duration_s"].median()),
-        "median_turns": float(s["turns"].median()),
-        "median_tool_calls": float(s["tool_calls"].median()),
+        "median_turns": float(cc["turns"].median()) if has_cc else None,
+        "median_tool_calls": float(cc["tool_calls"].median()) if has_cc else None,
         "median_cost_usd": float(s["cost_usd"].median()),
         "p90_cost_usd": float(s["cost_usd"].quantile(0.9)),
         "max_cost_usd": float(s["cost_usd"].max()),
@@ -201,7 +212,7 @@ def sessions_summary(con=Depends(get_con), f: Filters = Depends(get_filters)):
 
 @app.get("/adoption/{dimension}", tags=["adoption"])
 def adoption(dimension: str, con=Depends(get_con), f: Filters = Depends(get_filters)):
-    """`dimension` ∈ {terminal_type, cli_version, os_type, location}."""
+    """`dimension` ∈ {terminal_type, cli_version, os_type, location, client}."""
     try:
         return _records(queries.adoption_by_dimension(con, f, dimension))
     except ValueError as exc:

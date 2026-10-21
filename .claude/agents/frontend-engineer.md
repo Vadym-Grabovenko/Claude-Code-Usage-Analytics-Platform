@@ -27,7 +27,7 @@ need (name, filters, returned columns) so the backend-engineer can add it — do
   `st.caption` that says what decision the chart informs.
 - Claude Code–only metrics (tool decisions/results) show an `st.info` when Claude Code isn't
   in the selection instead of an empty chart. Any empty result → `st.warning`, not a blank plot.
-- `st.plotly_chart(..., use_container_width=True)`; cache connections with `st.cache_resource`
+- `st.plotly_chart(..., width="stretch")` (not the deprecated `use_container_width`); cache connections with `st.cache_resource`
   and filter options with `st.cache_data`, as the existing code does.
 - No secrets, tokens or hard-coded paths in the dashboard.
 
