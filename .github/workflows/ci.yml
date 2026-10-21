@@ -7,6 +7,11 @@ on:
     branches: [main]
   pull_request:
 
+# Runners are pinned to an explicit image (not `ubuntu-latest`, which moves between
+# Ubuntu releases): ubuntu-26.04 ships Docker Engine, the compose v2 plugin, buildx, curl
+# and Python 3.12 in the tool cache; the "Check runner tooling" step fails fast if a
+# future image drops any of them.
+
 # A newer push to the same ref cancels an in-flight run.
 concurrency:
   group: ci-${{ github.ref }}
@@ -15,22 +20,25 @@ concurrency:
 jobs:
   test:
     name: Unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # full history: tests/test_generator.py re-runs the original generator from
           # its commit to prove the Claude Code output is unchanged
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"   # matches the Docker base image (python:3.12-slim)
+          python-version: "3.12"   # same minor as the Docker base image (python:3.12.x-slim-trixie)
           cache: pip
+          cache-dependency-path: |
+            requirements*.txt
+            constraints.txt
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install dependencies (runtime + test, pinned to the image's verified versions)
+        run: pip install -r requirements-dev.txt -c constraints.txt
 
       - name: Run test suite
         run: PYTHONPATH=src pytest -q
@@ -38,19 +46,28 @@ jobs:
   docker:
     name: Build image & smoke-test the stack
     needs: test          # gate: only build/run if the tests pass
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
+    env:
+      # small dataset for a fast smoke test; GEN_PROVIDERS empty = all four providers
+      GEN_NUM_USERS: "15"
+      GEN_NUM_SESSIONS: "200"
+      GEN_DAYS: "14"
+      GEN_PROVIDERS: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      - name: Check runner tooling
+        run: |
+          docker version --format 'docker engine {{.Server.Version}}'
+          docker compose version
+          docker buildx version
+          curl --version | head -n1
 
       - name: Build the image
         run: docker compose build
 
-      - name: Start the stack (small dataset for a fast smoke test)
-        env:
-          GEN_NUM_USERS: "15"
-          GEN_NUM_SESSIONS: "200"
-          GEN_DAYS: "14"
+      - name: Start the stack
         run: docker compose up -d
 
       - name: Wait for the dashboard and API to become healthy
@@ -76,6 +93,24 @@ jobs:
           grep -q '"api_requests"' /tmp/kpis.json
           # a real cost aggregate proves the pipeline ran end-to-end, not just liveness
           curl -sf "http://localhost:8000/cost/by-model" | grep -q '"model"'
+
+      - name: Smoke-test the multi-provider API
+        run: |
+          # expected = providers in GEN_PROVIDERS (empty = all 4), deduped
+          expected=$(printf '%s' "${GEN_PROVIDERS:-claude_code,openai,gemini,deepseek}" \
+                     | tr ',' '\n' | tr -d ' \t' | grep -v '^$' | sort -u | wc -l)
+          echo "GET /providers/summary (expecting $expected providers):"
+          curl -sf http://localhost:8000/providers/summary | tee /tmp/providers.json
+          echo
+          python3 - "$expected" <<'PY'
+          import json, sys
+          rows = json.load(open("/tmp/providers.json"))
+          got = sorted(r["provider"] for r in rows)
+          want = int(sys.argv[1])
+          assert len(got) == want, f"expected {want} providers, got {len(got)}: {got}"
+          assert all(r["requests"] > 0 for r in rows), rows
+          print(f"OK: {len(got)} providers with data: {got}")
+          PY
 
       - name: Show logs on failure
         if: failure()

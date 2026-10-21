@@ -2,6 +2,8 @@ services:
   dashboard:
     build: .
     image: cc-analytics
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "8501:8501"
     environment:
@@ -23,11 +25,15 @@ services:
     image: cc-analytics
     depends_on:
       - dashboard
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+    # Same uid selection as the dashboard (owner of ./data, else `app`), then the API.
     entrypoint:
+      - /app/docker/run-as-data-owner.sh
       - sh
       - -c
       - "until [ -f \"$$DUCKDB_PATH\" ]; do echo 'api: waiting for analytics.duckdb…'; sleep 2; done;
