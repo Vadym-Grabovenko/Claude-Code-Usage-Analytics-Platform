@@ -5,11 +5,12 @@ GEN_NUM_USERS ?= 100
 GEN_NUM_SESSIONS ?= 5000
 GEN_DAYS ?= 60
 GEN_SEED ?= 42
+GEN_PROVIDERS ?= claude_code,openai,gemini,deepseek
 
 help:
 	@echo "Targets:"
 	@echo "  install    Install Python dependencies"
-	@echo "  data       Generate the synthetic telemetry dataset"
+	@echo "  data       Generate synthetic usage data for all providers (GEN_PROVIDERS)"
 	@echo "  etl        Build the DuckDB analytics database from the dataset"
 	@echo "  pipeline   data + etl (full refresh)"
 	@echo "  dashboard  Launch the Streamlit dashboard"
@@ -26,6 +27,7 @@ data:
 		--num-sessions $(GEN_NUM_SESSIONS) \
 		--days $(GEN_DAYS) \
 		--seed $(GEN_SEED) \
+		--providers "$(GEN_PROVIDERS)" \
 		--output-dir data/output
 
 etl:

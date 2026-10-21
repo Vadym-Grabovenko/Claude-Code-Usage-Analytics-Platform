@@ -10,6 +10,7 @@ services:
       GEN_NUM_SESSIONS: ${GEN_NUM_SESSIONS:-5000}
       GEN_DAYS: ${GEN_DAYS:-60}
       GEN_SEED: ${GEN_SEED:-42}
+      GEN_PROVIDERS: ${GEN_PROVIDERS:-claude_code,openai,gemini,deepseek}
     volumes:
       # Persist generated data + DuckDB on the host so restarts don't regenerate.
       # The host ./data also provides generate_fake_data.py to the container.

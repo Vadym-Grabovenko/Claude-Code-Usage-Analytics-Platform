@@ -6,8 +6,20 @@ venv/
 *.egg-info/
 .pytest_cache/
 
-# Secrets / local config
+# Secrets / local config — only .env.example may be committed
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*credentials*.json
+*service-account*.json
+.claude/settings.local.json
+
+# Local-only planning docs (specs are not part of the deliverable)
+docs/SPEC_*.md
+docs/CODE_WALKTHROUGH.md
 
 # Generated data & database (reproducible via `make data && make etl`)
 data/output/
