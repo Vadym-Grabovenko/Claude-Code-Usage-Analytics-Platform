@@ -33,14 +33,11 @@ class Filters:
     end_date: date | None = None
     practices: list[str] = field(default_factory=list)
     levels: list[str] = field(default_factory=list)
-    # ``models``: raw model ids. For backward compatibility with the dashboard (which sends
-    # model *families* here) it also matches ``model_family`` unless
-    # ``models_match_family=False`` -- the API sets that so ``?models=gpt-4o`` means exactly
-    # the raw id ``gpt-4o`` and does not swallow dated snapshots like ``gpt-4o-2024-08-06``.
+    # ``models``: raw model ids, exact match (``gpt-4o`` does not match the dated snapshot
+    # ``gpt-4o-2024-08-06``); use ``model_families`` to select a normalized family.
     models: list[str] = field(default_factory=list)
     providers: list[str] = field(default_factory=list)    # e.g. ["claude_code", "openai"]
     model_families: list[str] = field(default_factory=list)  # normalized family, e.g. "gpt-4o"
-    models_match_family: bool = True
 
     def clause(self) -> tuple[str, list]:
         """Return a ``WHERE`` fragment (without the keyword) and bind params."""
@@ -59,15 +56,8 @@ class Filters:
             conds.append(f"level IN ({', '.join('?' * len(self.levels))})")
             params.extend(self.levels)
         if self.models:
-            marks = ", ".join("?" * len(self.models))
-            if self.models_match_family:
-                # Legacy/dashboard behaviour: raw id OR family (see field comment).
-                conds.append(f"(model IN ({marks}) OR model_family IN ({marks}))")
-                params.extend(self.models)
-                params.extend(self.models)
-            else:
-                conds.append(f"model IN ({marks})")
-                params.extend(self.models)
+            conds.append(f"model IN ({', '.join('?' * len(self.models))})")
+            params.extend(self.models)
         if self.model_families:
             conds.append(f"model_family IN ({', '.join('?' * len(self.model_families))})")
             params.extend(self.model_families)

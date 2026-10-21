@@ -135,6 +135,21 @@ def test_normalised_digest_ignores_last_digit_and_newlines(tmp_path):
     assert normalised_digest(unix) == normalised_digest(dos)
 
 
+@pytest.mark.parametrize("subset", ["gemini", "openai,deepseek", "claude_code,gemini"])
+def test_provider_files_identical_for_any_subset(tmp_path, subset):
+    """Each provider file is byte-identical whether generated alone, in a subset, or
+    in an all-providers run (the population draw doesn't depend on --providers)."""
+    full = _run(GENERATOR, tmp_path / "full")
+    part = _run(GENERATOR, tmp_path / "part", "--providers", subset)
+    names = {"openai": "openai_usage.jsonl", "gemini": "gemini_usage.jsonl",
+             "deepseek": "deepseek_usage.csv"}
+    selected = [names[p] for p in subset.split(",") if p in names]
+    assert selected and set(selected) <= set(part)
+    for name in selected:
+        assert part[name] == full[name], f"{name} differs for --providers {subset}"
+    assert part["employees.csv"] == full["employees.csv"]
+
+
 def test_providers_flag_limits_output(tmp_path):
     files = _run(GENERATOR, tmp_path / "x", "--providers", "claude_code,deepseek")
     assert set(files) == {"telemetry_logs.jsonl", "employees.csv", "deepseek_usage.csv"}

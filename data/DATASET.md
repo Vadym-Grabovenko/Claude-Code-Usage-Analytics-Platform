@@ -26,14 +26,20 @@ python3 generate_fake_data.py --num-users 100 --num-sessions 5000 --days 60
 | `--days` | 30 | Time span in days (data ends 2026-02-01) |
 | `--output-dir` | `output` | Output directory |
 | `--seed` | 42 | Random seed for reproducibility |
-| `--providers` | `claude_code,openai,gemini,deepseek` | Providers to generate |
+| `--providers` | `claude_code,openai,gemini,deepseek` | Comma-separated providers to generate; empty = all four, an unknown name is an error |
+
+`telemetry_logs.jsonl` is written only when `claude_code` is selected; `employees.csv` is always
+written. From the repo root, `make data` (and the Docker entrypoint) pass `GEN_NUM_USERS`,
+`GEN_NUM_SESSIONS`, `GEN_DAYS`, `GEN_SEED` and `GEN_PROVIDERS` (defaults 100 / 5000 / 60 / 42 / all)
+and write to `data/output/`.
 
 **Reproducibility.** The Claude Code files are exactly what the original Claude-Code-only
 generator produced for the same arguments: the other providers use their own
 `random.Random(seed + offset)` and run after Claude Code, so they never consume the
 Claude Code random stream. (Claude Code session/account ids come from `uuid.uuid4()` and
 differ between runs; everything else is seeded. The provider files are byte-identical for
-a given seed.)
+a given seed, and stable for any `--providers` subset.) `tests/test_generator.py` enforces both:
+it re-runs the original generator from git history and compares the Claude Code output byte for byte.
 
 ## Output Files
 
@@ -47,11 +53,15 @@ a given seed.)
 
 Every record carries a `cost_usd` computed by the generator as
 `(uncached input × input price + cached input × cached price + output × output price) / 1e6`
-from the model catalog (`MODEL_CATALOG` in the generator; prices per 1M tokens are
-**illustrative**, not vendor quotes). Failed requests carry `cost_usd = 0`. Claude Code keeps
+from the model catalog (`MODEL_CATALOG` in the generator: per model a weight, prices per 1M
+tokens, token and latency profiles, error rate; prices are **illustrative**, not vendor quotes).
+Output already includes reasoning tokens. Failed requests carry `cost_usd = 0`. Claude Code keeps
 its own reported-cost distribution.
 
 ## Claude Code telemetry structure
+
+Doubly nested, and every numeric attribute is a **string** (`"cost_usd": "0.071"`). The other
+providers use real JSON/CSV numbers.
 
 Each log record contains a batch of `logEvents`. Each event has a JSON `message` with:
 
@@ -118,7 +128,9 @@ The ETL (`src/analytics/providers/`) maps every format to one row per event with
 | `session_id` | `session.id` | `conversation_id` or synthetic | `sessionId` or synthetic | synthetic |
 | `client` | `claude_code_cli` | `client` | `surface` | `api` |
 
-Successful requests become `api_request`, failures `api_error`; OpenAI `tool_calls` become
+Every row also gets `model_family` (the model id without date/revision suffixes, e.g.
+`gpt-4o-2024-08-06` → `gpt-4o`) and `source_event_id` (the source id, used with `provider` to
+remove duplicates). Successful requests become `api_request`, failures `api_error`; OpenAI `tool_calls` become
 `tool_result` rows with `success` unknown. Tool decisions, prompts and terminal/CLI/OS
 details exist only for Claude Code.
 

@@ -9,7 +9,7 @@ GEN_PROVIDERS ?= claude_code,openai,gemini,deepseek
 
 help:
 	@echo "Targets:"
-	@echo "  install    Install Python dependencies (runtime + test: requirements-dev.txt)"
+	@echo "  install    Install Python dependencies (requirements-dev.txt, pinned by constraints.txt)"
 	@echo "  data       Generate synthetic usage data for all providers (GEN_PROVIDERS)"
 	@echo "  etl        Build the DuckDB analytics database from the dataset"
 	@echo "  pipeline   data + etl (full refresh)"
@@ -17,9 +17,10 @@ help:
 	@echo "  api        Launch the FastAPI server (docs at :8000/docs)"
 	@echo "  test       Run the test suite"
 	@echo "  clean      Remove generated data and database"
+	@echo "  docker     Build and start the whole stack (docker compose up --build)"
 
 install:
-	$(PY) -m pip install -r requirements-dev.txt
+	$(PY) -m pip install -r requirements-dev.txt -c constraints.txt
 
 data:
 	$(PY) data/generate_fake_data.py \

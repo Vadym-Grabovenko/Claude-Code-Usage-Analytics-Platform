@@ -146,9 +146,10 @@ def test_provider_filter_and_backward_compatible_kpis(dataset):
     assert everything["total_cost"] == pytest.approx(
         sum(queries.kpis(con, Filters(providers=[p]))["total_cost"]
             for p in ["claude_code", "openai", "gemini", "deepseek"]))
-    # models filter accepts raw ids (old callers) and families (dashboard)
+    # `models` = raw ids (exact), `model_families` = normalized families
     assert int(queries.kpis(con, Filters(models=["gpt-4o-2024-08-06"]))["api_requests"]) == 2
-    assert int(queries.kpis(con, Filters(models=["gpt-4o"]))["api_requests"]) == 2
+    assert int(queries.kpis(con, Filters(models=["gpt-4o"]))["api_requests"]) == 0
+    assert int(queries.kpis(con, Filters(model_families=["gpt-4o"]))["api_requests"]) == 2
     opts = queries.filter_options(con)
     assert opts["providers"] == ["claude_code", "deepseek", "gemini", "openai"]
     assert opts["models_by_provider"]["openai"] == ["gpt-4o", "o3"]

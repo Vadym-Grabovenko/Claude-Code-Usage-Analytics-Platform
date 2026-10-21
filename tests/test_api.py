@@ -167,6 +167,49 @@ def test_providers_list_marks_missing_provider(client):
     assert body["openai"] == {**body["openai"], "has_data": False, "events": 0}
 
 
+def _cc_event(body, session, minute, **attrs):
+    return {"body": f"claude_code.{body}",
+            "attributes": {"event.timestamp": f"2026-01-15T09:{minute:02d}:00.000Z",
+                           "session.id": session, "user.email": "alex.chen@example.com",
+                           **attrs}}
+
+
+def test_sessions_summary_turns_use_claude_code_slice(multi_client, tmp_path):
+    # Two Claude Code sessions with turns/tool calls (1 prompt + 2 tools, 3 prompts + 4
+    # tools); the other providers' sessions have neither and must not drag the medians to 0.
+    events = []
+    for session, prompts, tools in (("sess-a", 1, 2), ("sess-b", 3, 4)):
+        events += [_cc_event("user_prompt", session, i, prompt_length="10") for i in range(prompts)]
+        events += [_cc_event("tool_result", session, 10 + i, tool_name="Read", success="true",
+                             duration_ms="5") for i in range(tools)]
+        events.append(_cc_event("api_request", session, 30, model="claude-opus-4-6", cost_usd="0.05"))
+    (tmp_path / "telemetry_logs.jsonl").write_text(json.dumps(_batch(*events)) + "\n")
+    etl.build_database(tmp_path / "telemetry_logs.jsonl", tmp_path / "employees.csv",
+                       config.DUCKDB_PATH,
+                       providers=["claude_code", "openai", "gemini", "deepseek"])
+
+    default = multi_client.get("/sessions/summary").json()
+    cc_only = multi_client.get("/sessions/summary", params={"providers": "claude_code"}).json()
+    assert default["median_turns"] == cc_only["median_turns"] == 2.0
+    assert default["median_tool_calls"] == cc_only["median_tool_calls"] == 3.0
+    assert default["cc_sessions"] == cc_only["cc_sessions"] == cc_only["sessions"] == 2
+    assert default["sessions"] > cc_only["sessions"]          # duration/cost: all providers
+    mixed = multi_client.get("/sessions/summary",
+                             params={"providers": ["claude_code", "openai"]}).json()
+    assert mixed["median_turns"] == 2.0 and mixed["cc_sessions"] == 2
+    others = multi_client.get("/sessions/summary", params={"providers": "openai"}).json()
+    assert others["sessions"] > 0 and others["cc_sessions"] == 0
+    assert others["median_turns"] is None and others["median_tool_calls"] is None
+    assert others["median_cost_usd"] is not None
+
+
+def test_sessions_summary_claude_code_only_db_unchanged(client):
+    body = client.get("/sessions/summary").json()
+    assert body["sessions"] == body["cc_sessions"] == 1
+    assert body["median_turns"] == 0.0 and body["median_tool_calls"] == 0.0
+    assert body["total_cost_usd"] == pytest.approx(0.142, abs=1e-6)
+
+
 def test_providers_summary(multi_client):
     r = multi_client.get("/providers/summary")
     assert r.status_code == 200
@@ -220,12 +263,10 @@ def test_model_families_filter_matches_family(multi_client):
     assert [r["model"] for r in rows] == ["gpt-4o-2024-08-06"]
 
 
-def test_filters_models_dashboard_compat():
-    """Filters.models keeps matching model OR family by default (dashboard sends families)."""
+def test_filters_models_raw_ids_and_families():
+    """Filters.models matches raw ids only; Filters.model_families matches families."""
     from analytics.queries import Filters
     where, params = Filters(models=["gpt-4o"]).clause()
-    assert "model_family IN" in where and params == ["gpt-4o", "gpt-4o"]
-    where, params = Filters(models=["gpt-4o"], models_match_family=False).clause()
     assert where == "model IN (?)" and params == ["gpt-4o"]
     where, params = Filters(model_families=["gpt-4o"]).clause()
     assert where == "model_family IN (?)" and params == ["gpt-4o"]
@@ -293,3 +334,31 @@ def test_by_provider_param(multi_client, path):
     assert flat.status_code == split.status_code == 200
     assert flat.json() and "provider" not in flat.json()[0]
     assert {row["provider"] for row in split.json()} == ALL_PROVIDERS
+
+
+# --- smoke: every GET route answers 200 + JSON on the 4-provider fixture -------------
+
+_DIMENSION_FOR = {"/adoption/{dimension}": "client", "/providers/by/{dimension}": "practice"}
+_GET_ROUTES = sorted(
+    r.path for r in app.routes
+    if "GET" in getattr(r, "methods", set()) and r.path not in ("/docs", "/redoc", "/openapi.json",
+                                                                 "/docs/oauth2-redirect")
+)
+
+
+def test_smoke_route_list_is_complete():
+    # guards the parametrization below against silently testing nothing
+    assert {"/kpis", "/filters", "/activity/daily", "/activity/heatmap", "/cost/by-level",
+            "/users/top", "/tools", "/tools/decision-sources", "/errors",
+            "/sessions/summary", "/data-quality"} <= set(_GET_ROUTES)
+    assert set(_DIMENSION_FOR) <= set(_GET_ROUTES)
+
+
+@pytest.mark.parametrize("path", _GET_ROUTES)
+def test_every_get_route_returns_json(multi_client, path):
+    url = path.replace("{dimension}", _DIMENSION_FOR.get(path, ""))
+    assert "{" not in url, f"unhandled path parameter in {path}"
+    r = multi_client.get(url)
+    assert r.status_code == 200, (path, r.text)
+    assert r.headers["content-type"].startswith("application/json")
+    assert r.json() is not None
